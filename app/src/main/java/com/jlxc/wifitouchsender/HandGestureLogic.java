@@ -1,9 +1,5 @@
 package com.jlxc.wifitouchsender;
 
-import com.google.mediapipe.tasks.components.containers.NormalizedLandmark;
-
-import java.util.List;
-
 public class HandGestureLogic {
     public interface Listener {
         void onCursor(float nx, float ny);
@@ -13,6 +9,7 @@ public class HandGestureLogic {
         void onDebug(String text);
     }
 
+    // MediaPipe 21 hand landmarks index.
     private static final int WRIST = 0;
     private static final int THUMB_IP = 3;
     private static final int THUMB_TIP = 4;
@@ -64,22 +61,26 @@ public class HandGestureLogic {
         smoothY = -1f;
     }
 
-    public void process(List<NormalizedLandmark> lm) {
-        if (lm == null || lm.size() < 21) return;
+    /**
+     * xy: 21 landmarks * 2, format: [x0,y0,x1,y1...], normalized 0..1.
+     * Keeping this class free of MediaPipe imports lets the app open even if MediaPipe crashes only when gesture mode starts.
+     */
+    public void process(float[] xy) {
+        if (xy == null || xy.length < 42) return;
         long now = android.os.SystemClock.uptimeMillis();
 
-        float palm = Math.max(0.001f, dist(lm, WRIST, MIDDLE_MCP));
-        float pinchRatio = dist(lm, THUMB_TIP, INDEX_TIP) / palm;
+        float palm = Math.max(0.001f, dist(xy, WRIST, MIDDLE_MCP));
+        float pinchRatio = dist(xy, THUMB_TIP, INDEX_TIP) / palm;
 
-        boolean indexOpen = fingerExtended(lm, INDEX_TIP, INDEX_PIP, WRIST);
-        boolean middleOpen = fingerExtended(lm, MIDDLE_TIP, MIDDLE_PIP, WRIST);
-        boolean ringOpen = fingerExtended(lm, RING_TIP, RING_PIP, WRIST);
-        boolean pinkyOpen = fingerExtended(lm, PINKY_TIP, PINKY_PIP, WRIST);
-        boolean thumbOpen = thumbExtended(lm, palm);
+        boolean indexOpen = fingerExtended(xy, INDEX_TIP, INDEX_PIP, WRIST);
+        boolean middleOpen = fingerExtended(xy, MIDDLE_TIP, MIDDLE_PIP, WRIST);
+        boolean ringOpen = fingerExtended(xy, RING_TIP, RING_PIP, WRIST);
+        boolean pinkyOpen = fingerExtended(xy, PINKY_TIP, PINKY_PIP, WRIST);
+        boolean thumbOpen = thumbExtended(xy, palm);
         int openCount = (thumbOpen ? 1 : 0) + (indexOpen ? 1 : 0) + (middleOpen ? 1 : 0)
                 + (ringOpen ? 1 : 0) + (pinkyOpen ? 1 : 0);
 
-        updateCursor(lm);
+        updateCursor(xy);
 
         boolean homePose = thumbOpen && indexOpen && middleOpen && ringOpen && pinkyOpen;
         boolean backPose = thumbOpen && indexOpen && pinchRatio > 0.86f && openCount <= 3 && !homePose;
@@ -117,9 +118,9 @@ public class HandGestureLogic {
                 pose, openCount, pinchRatio, indexOpen ? "开" : "收", thumbOpen ? "开" : "收"));
     }
 
-    private void updateCursor(List<NormalizedLandmark> lm) {
-        float cx = (x(lm, WRIST) + x(lm, INDEX_MCP) + x(lm, MIDDLE_MCP) + x(lm, RING_MCP) + x(lm, PINKY_MCP)) / 5f;
-        float cy = (y(lm, WRIST) + y(lm, INDEX_MCP) + y(lm, MIDDLE_MCP) + y(lm, RING_MCP) + y(lm, PINKY_MCP)) / 5f;
+    private void updateCursor(float[] xy) {
+        float cx = (x(xy, WRIST) + x(xy, INDEX_MCP) + x(xy, MIDDLE_MCP) + x(xy, RING_MCP) + x(xy, PINKY_MCP)) / 5f;
+        float cy = (y(xy, WRIST) + y(xy, INDEX_MCP) + y(xy, MIDDLE_MCP) + y(xy, RING_MCP) + y(xy, PINKY_MCP)) / 5f;
         if (mirrorX) cx = 1f - cx;
         cx = clamp01(cx);
         cy = clamp01(cy);
@@ -145,24 +146,24 @@ public class HandGestureLogic {
         return pose.equals(candidatePose) && now - candidateSince >= minMs;
     }
 
-    private boolean fingerExtended(List<NormalizedLandmark> lm, int tip, int pip, int wrist) {
-        return dist(lm, wrist, tip) > dist(lm, wrist, pip) * 1.12f;
+    private boolean fingerExtended(float[] xy, int tip, int pip, int wrist) {
+        return dist(xy, wrist, tip) > dist(xy, wrist, pip) * 1.12f;
     }
 
-    private boolean thumbExtended(List<NormalizedLandmark> lm, float palm) {
-        float wristToTip = dist(lm, WRIST, THUMB_TIP);
-        float wristToIp = dist(lm, WRIST, THUMB_IP);
-        float thumbToIndex = dist(lm, THUMB_TIP, INDEX_TIP);
+    private boolean thumbExtended(float[] xy, float palm) {
+        float wristToTip = dist(xy, WRIST, THUMB_TIP);
+        float wristToIp = dist(xy, WRIST, THUMB_IP);
+        float thumbToIndex = dist(xy, THUMB_TIP, INDEX_TIP);
         return wristToTip > wristToIp * 1.04f && thumbToIndex > palm * 0.58f;
     }
 
-    private float dist(List<NormalizedLandmark> lm, int a, int b) {
-        float dx = x(lm, a) - x(lm, b);
-        float dy = y(lm, a) - y(lm, b);
+    private float dist(float[] xy, int a, int b) {
+        float dx = x(xy, a) - x(xy, b);
+        float dy = y(xy, a) - y(xy, b);
         return (float) Math.sqrt(dx * dx + dy * dy);
     }
 
-    private float x(List<NormalizedLandmark> lm, int index) { return lm.get(index).x(); }
-    private float y(List<NormalizedLandmark> lm, int index) { return lm.get(index).y(); }
+    private float x(float[] xy, int index) { return xy[index * 2]; }
+    private float y(float[] xy, int index) { return xy[index * 2 + 1]; }
     private float clamp01(float v) { return Math.max(0f, Math.min(1f, v)); }
 }

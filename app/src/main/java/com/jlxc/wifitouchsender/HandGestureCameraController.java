@@ -45,7 +45,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class HandGestureCameraController {
     public interface Listener {
-        void onHandLandmarks(HandLandmarkerResult result);
+        void onHandLandmarks(float[] xy);
+        void onNoHand();
         void onStatus(String text, boolean ok);
     }
 
@@ -94,8 +95,8 @@ public class HandGestureCameraController {
         }
         try {
             setupHandLandmarker();
-        } catch (Exception e) {
-            listener.onStatus("手部模型初始化失败：" + e.getMessage() + "。请确认 assets/hand_landmarker.task 已存在。", false);
+        } catch (Throwable e) {
+            listener.onStatus("手部模型初始化失败：" + safeMsg(e) + "。请确认 assets/hand_landmarker.task 已存在，并且手机为 arm64。", false);
             closeHandLandmarker();
             return;
         }
@@ -168,8 +169,8 @@ public class HandGestureCameraController {
             if (context.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) return;
             manager.openCamera(cameraId, stateCallback, cameraHandler);
             listener.onStatus("手势摄像头启动中...", true);
-        } catch (Exception e) {
-            listener.onStatus("打开摄像头失败：" + e.getMessage(), false);
+        } catch (Throwable e) {
+            listener.onStatus("打开摄像头失败：" + safeMsg(e), false);
         }
     }
 
@@ -206,18 +207,27 @@ public class HandGestureCameraController {
     }
 
     private Size chooseSmallSize(Size[] sizes) {
-        if (sizes == null || sizes.length == 0) return new Size(320, 240);
+        if (sizes == null || sizes.length == 0) return new Size(640, 480);
         List<Size> list = Arrays.asList(sizes);
-        Size best = Collections.min(list, new Comparator<Size>() {
+        // IMPORTANT: return an actual supported Camera2 output size.
+        // The previous version clamped width/height after picking a size; on some camera HALs
+        // that creates an unsupported Surface size and can crash when configuring the session.
+        return Collections.min(list, new Comparator<Size>() {
             @Override public int compare(Size a, Size b) {
-                int da = Math.abs(a.getWidth() - 320) + Math.abs(a.getHeight() - 240);
-                int db = Math.abs(b.getWidth() - 320) + Math.abs(b.getHeight() - 240);
-                return da - db;
+                return score(a) - score(b);
+            }
+            private int score(Size s) {
+                int w = s.getWidth();
+                int h = s.getHeight();
+                int area = w * h;
+                int target = 640 * 480;
+                int areaPenalty = Math.abs(area - target) / 1000;
+                int aspectPenalty = Math.abs(w * 3 - h * 4); // prefer 4:3 because hands fill frame well
+                int hugePenalty = area > 1280 * 720 ? 10000 : 0;
+                int tinyPenalty = area < 320 * 240 ? 5000 : 0;
+                return areaPenalty + aspectPenalty + hugePenalty + tinyPenalty;
             }
         });
-        int w = Math.max(160, Math.min(640, best.getWidth()));
-        int h = Math.max(120, Math.min(480, best.getHeight()));
-        return new Size(w, h);
     }
 
     private final TextureView.SurfaceTextureListener surfaceTextureListener = new TextureView.SurfaceTextureListener() {
@@ -267,9 +277,10 @@ public class HandGestureCameraController {
                     final Image img = image;
                     image = null;
                     inferExecutor.execute(() -> analyzeImage(img));
-                } catch (Exception e) {
+                } catch (Throwable e) {
                     if (image != null) image.close();
                     inferBusy.set(false);
+                    listener.onStatus("读取摄像头帧失败：" + safeMsg(e), false);
                 }
             }, cameraHandler);
 
@@ -285,16 +296,16 @@ public class HandGestureCameraController {
                     try {
                         session.setRepeatingRequest(builder.build(), null, cameraHandler);
                         listener.onStatus("手势识别已启动：半捏移动，捏合点击，L返回，五指HOME", true);
-                    } catch (Exception e) {
-                        listener.onStatus("启动预览失败：" + e.getMessage(), false);
+                    } catch (Throwable e) {
+                        listener.onStatus("启动预览失败：" + safeMsg(e), false);
                     }
                 }
                 @Override public void onConfigureFailed(CameraCaptureSession session) {
                     listener.onStatus("摄像头会话配置失败", false);
                 }
             }, cameraHandler);
-        } catch (Exception e) {
-            listener.onStatus("创建摄像头会话失败：" + e.getMessage(), false);
+        } catch (Throwable e) {
+            listener.onStatus("创建摄像头会话失败：" + safeMsg(e), false);
         }
     }
 
@@ -304,9 +315,20 @@ public class HandGestureCameraController {
             Bitmap bitmap = imageToBitmap(image, getRotationDegrees());
             MPImage mpImage = new BitmapImageBuilder(bitmap).build();
             HandLandmarkerResult result = handLandmarker.detect(mpImage);
-            listener.onHandLandmarks(result);
-        } catch (Exception e) {
-            listener.onStatus("手势识别失败：" + e.getMessage(), false);
+            if (result != null && !result.landmarks().isEmpty()) {
+                List<com.google.mediapipe.tasks.components.containers.NormalizedLandmark> hand = result.landmarks().get(0);
+                float[] xy = new float[42];
+                for (int i = 0; i < 21 && i < hand.size(); i++) {
+                    xy[i * 2] = hand.get(i).x();
+                    xy[i * 2 + 1] = hand.get(i).y();
+                }
+                listener.onHandLandmarks(xy);
+            } else {
+                listener.onNoHand();
+            }
+            bitmap.recycle();
+        } catch (Throwable e) {
+            listener.onStatus("手势识别失败：" + safeMsg(e), false);
         } finally {
             try { image.close(); } catch (Exception ignored) {}
             inferBusy.set(false);
@@ -370,6 +392,12 @@ public class HandGestureCameraController {
             }
         }
         return nv21;
+    }
+
+    private static String safeMsg(Throwable e) {
+        if (e == null) return "unknown";
+        String msg = e.getMessage();
+        return e.getClass().getSimpleName() + (msg == null || msg.length() == 0 ? "" : ": " + msg);
     }
 
     private void closeCamera() {

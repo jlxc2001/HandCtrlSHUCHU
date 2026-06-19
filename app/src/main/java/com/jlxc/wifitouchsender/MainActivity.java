@@ -24,8 +24,6 @@ import android.widget.SeekBar;
 import android.widget.Switch;
 import android.widget.TextView;
 
-import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult;
-
 public class MainActivity extends Activity {
     private static final String PREF = "wifi_mouse_sender";
     private static final int DEFAULT_PORT = 47220;
@@ -73,6 +71,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        CrashHandler.install(this);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         buildUi();
         setupHandGesture();
@@ -155,6 +154,19 @@ public class MainActivity extends Activity {
         statusText.setPadding(dp(10), dp(8), dp(10), dp(8));
         statusText.setBackgroundColor(Color.WHITE);
         root.addView(statusText, lp(-1, -2));
+
+        String lastCrash = CrashHandler.readLastCrash(this);
+        if (lastCrash != null && lastCrash.length() > 0) {
+            TextView crashText = new TextView(this);
+            crashText.setText("上次闪退记录：\n" + lastCrash);
+            crashText.setTextColor(Color.rgb(170, 36, 42));
+            crashText.setTextSize(12);
+            crashText.setPadding(dp(10), dp(8), dp(10), dp(8));
+            crashText.setBackgroundColor(Color.WHITE);
+            LinearLayout.LayoutParams crashLp = lp(-1, -2);
+            crashLp.topMargin = dp(8);
+            root.addView(crashText, crashLp);
+        }
 
         gestureSwitch = new Switch(this);
         gestureSwitch.setText("开启摄像头手势控制");
@@ -276,21 +288,6 @@ public class MainActivity extends Activity {
             }
         });
 
-        handCamera = new HandGestureCameraController(this, cameraPreview, new HandGestureCameraController.Listener() {
-            @Override public void onHandLandmarks(HandLandmarkerResult result) {
-                handler.post(() -> {
-                    if (result != null && !result.landmarks().isEmpty()) {
-                        gestureLogic.process(result.landmarks().get(0));
-                    } else {
-                        setGestureText("手势状态：未检测到手", false);
-                        gestureLogic.reset();
-                    }
-                });
-            }
-            @Override public void onStatus(String text, boolean ok) {
-                handler.post(() -> setGestureText(text, ok));
-            }
-        });
 
         gestureSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> {
             if (isChecked) startGestureMode(); else stopGestureMode();
@@ -311,7 +308,28 @@ public class MainActivity extends Activity {
         }
         gestureLogic.setMirrorX(mirrorSwitch.isChecked());
         gestureLogic.reset();
-        handCamera.start();
+        try {
+            if (handCamera == null) {
+                handCamera = new HandGestureCameraController(this, cameraPreview, new HandGestureCameraController.Listener() {
+                    @Override public void onHandLandmarks(float[] xy) {
+                        handler.post(() -> gestureLogic.process(xy));
+                    }
+                    @Override public void onNoHand() {
+                        handler.post(() -> {
+                            setGestureText("手势状态：未检测到手", false);
+                            gestureLogic.reset();
+                        });
+                    }
+                    @Override public void onStatus(String text, boolean ok) {
+                        handler.post(() -> setGestureText(text, ok));
+                    }
+                });
+            }
+            handCamera.start();
+        } catch (Throwable e) {
+            setGestureText("手势模块启动失败：" + e.getClass().getSimpleName() + " " + (e.getMessage() == null ? "" : e.getMessage()), false);
+            if (gestureSwitch != null) gestureSwitch.setChecked(false);
+        }
     }
 
     private void stopGestureMode() {
