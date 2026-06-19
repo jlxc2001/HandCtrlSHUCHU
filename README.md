@@ -1,62 +1,132 @@
-# WiFiTouchSender - 手势识别发射端
+# WiFiTouchSender / WiFi 鼠标输出端
 
-这是 WiFiTouchSender 的手势识别实验版。
+这是给 `WiFiTouchDemo` 接收端配套的手机端原生 APK。它不需要蓝牙、不需要 USB、不需要无障碍权限，只负责把手机触控板上的动作通过局域网 HTTP 指令发送给车机接收端。
 
-## 新增功能
+## 使用方式
 
-- 保留原来的触控板控制。
-- 新增摄像头手势控制开关。
-- 使用 MediaPipe Hand Landmarker 检测 21 个手部关键点。
-- 通过规则判断手势并复用原有 HTTP 接口发送指令：
-  - 手掌/半捏状态移动：发送 `/api/set`
-  - 食指 + 大拇指捏合：发送 `/api/tap`
-  - 大拇指 + 食指张开成 L：发送 `/api/back`
-  - 五指全部张开：发送 `/api/home`
+1. 车机端继续运行之前的 `WiFiTouchDemo` 接收端，并启动服务。
+2. 在手机上安装本项目打包出的 APK。
+3. 打开手机端 APK，填写车机 IP，例如：
 
-## 接收端协议不需要变
+   ```text
+   192.168.100.124
+   ```
 
-接收端继续实现这些接口即可：
+4. 端口保持默认：
 
-- `GET /status`
-- `POST /api/set`，参数：`x`、`y`
-- `POST /api/tap`
-- `POST /api/back`
-- `POST /api/home`
+   ```text
+   47220
+   ```
 
-## 模型文件
+5. 点击“连接测试”。如果成功，会显示车机屏幕分辨率、光标坐标、无障碍状态和悬浮窗状态。
+6. 在触控板区域滑动即可移动车机端悬浮光标。
 
-运行时需要：
+## 操作说明
 
-```text
-app/src/main/assets/hand_landmarker.task
-```
+- 单指滑动：移动光标
+- 单击：点击光标所在位置
+- 双击：双击
+- 长按：长按
+- 双指上下滑动：滚动
+- 返回 / 主页 / 最近任务：调用接收端无障碍全局动作
+- 相对触控板模式：像笔记本触控板一样移动光标
+- 绝对触控模式：手机触控板坐标直接映射到车机屏幕坐标
 
-GitHub Actions 已经加入自动下载模型的步骤；如果你用 Android Studio 本地编译，需要手动把官方 MediaPipe Hand Landmarker 模型放到上面这个路径。
+## 与接收端的接口协议
 
-## 测试步骤
-
-1. 先启动接收端服务，并确认无障碍权限可用。
-2. 在发射端输入接收端 IP 和端口。
-3. 点“连接测试”，确认能拿到屏幕尺寸。
-4. 开启“摄像头手势控制”。
-5. 允许摄像头权限。
-6. 手放在摄像头画面中测试：
-   - 手整体移动：光标跟随。
-   - 食指和大拇指捏合：点击。
-   - 食指和大拇指张开成 L：返回。
-   - 五指张开并保持一下：HOME。
-
-## 调参位置
-
-手势阈值都在：
+接收端默认地址：
 
 ```text
-app/src/main/java/com/jlxc/wifitouchsender/HandGestureLogic.java
+http://车机IP:47220
 ```
 
-重点参数：
+### 状态
 
-- `PINCH_ON`：捏合触发阈值，数值越大越容易触发点击。
-- `PINCH_OFF`：松开阈值，数值越大越不容易解除点击状态。
-- `POSE_STABLE_MS`：L 返回 / 五指 HOME 需要稳定保持多久才触发。
-- `ACTION_COOLDOWN_MS`：返回 / HOME 的防连发间隔。
+```http
+GET /status
+```
+
+返回示例：
+
+```json
+{
+  "ok": true,
+  "ip": "192.168.100.124",
+  "port": 47220,
+  "x": 1280,
+  "y": 360,
+  "screenW": 2560,
+  "screenH": 720,
+  "cursorShown": true,
+  "a11y": true
+}
+```
+
+### 相对移动
+
+```http
+POST /api/move
+Content-Type: application/x-www-form-urlencoded
+
+dx=10&dy=5&speed=1.4
+```
+
+### 绝对设置光标位置
+
+```http
+POST /api/set
+Content-Type: application/x-www-form-urlencoded
+
+x=1280&y=360
+```
+
+### 点击类动作
+
+```http
+POST /api/tap
+POST /api/doubletap
+POST /api/longpress
+```
+
+### 滚动
+
+```http
+POST /api/scroll
+Content-Type: application/x-www-form-urlencoded
+
+dy=30
+```
+
+### 系统按键
+
+```http
+POST /api/back
+POST /api/home
+POST /api/recents
+```
+
+## GitHub Actions 打包
+
+上传到 GitHub 后，进入 Actions，运行：
+
+```text
+Build Debug APK
+```
+
+打包产物名称：
+
+```text
+WiFiTouchSender-debug-apk
+```
+
+APK 路径：
+
+```text
+app/build/outputs/apk/debug/app-debug.apk
+```
+
+## 注意
+
+如果手机端连接测试成功，但点击/返回/Home 无效，说明网络没问题，问题大概率在车机接收端的无障碍服务没有真正生效。
+
+如果连接测试失败，先确认手机和车机在同一个 WiFi / 热点局域网内，并且车机端服务已经启动。
