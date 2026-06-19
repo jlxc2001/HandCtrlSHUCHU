@@ -93,7 +93,7 @@ public class HandGestureCameraController implements GestureController {
         try {
             setupHandLandmarker();
         } catch (Throwable e) {
-            listener.onStatus("手部模型初始化失败：" + safeMsg(e) + "。请确认 assets/hand_landmarker.task 已存在，并且手机为 arm64。", false);
+            listener.onStatus("手部模型初始化失败：" + safeMsg(e) + "。请确认 assets/hand_landmarker.task 已存在；MediaPipe 依赖版本为 0.10.26.1，面向 arm64/16KB page size 新机。", false);
             closeHandLandmarker();
             return;
         }
@@ -394,8 +394,18 @@ public class HandGestureCameraController implements GestureController {
 
     private static String safeMsg(Throwable e) {
         if (e == null) return "unknown";
-        String msg = e.getMessage();
-        return e.getClass().getSimpleName() + (msg == null || msg.length() == 0 ? "" : ": " + msg);
+        StringBuilder sb = new StringBuilder();
+        Throwable cur = e;
+        int depth = 0;
+        while (cur != null && depth < 4) {
+            if (depth > 0) sb.append(" <- ");
+            String msg = cur.getMessage();
+            sb.append(cur.getClass().getSimpleName());
+            if (msg != null && msg.length() > 0) sb.append(": ").append(msg);
+            cur = cur.getCause();
+            depth++;
+        }
+        return sb.toString();
     }
 
     private void closeCamera() {

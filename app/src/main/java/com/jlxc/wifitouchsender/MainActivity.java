@@ -71,14 +71,16 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        CrashHandler.install(this);
+        // CrashHandler is installed in App.onCreate(), before Activity initialization.
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         buildUi();
         setupHandGesture();
         loadPrefs();
         bindPad();
         applyTarget();
-        checkStatus();
+        // 不再启动时自动请求 /status，避免把网络/接收端问题误判成启动闪退。
+        // 进入界面后请手动点“连接测试”。
+        setStatus("已启动。请先点连接测试，再开启摄像头手势控制。", true);
     }
 
     @Override
@@ -103,7 +105,7 @@ public class MainActivity extends Activity {
         scroll.addView(root, new ScrollView.LayoutParams(-1, -2));
 
         TextView title = new TextView(this);
-        title.setText("WiFi 鼠标输出端 + 手势识别 v3");
+        title.setText("WiFi 鼠标输出端 + 手势识别 v4");
         title.setTextColor(Color.rgb(20, 24, 31));
         title.setTextSize(24);
         title.setGravity(Gravity.CENTER_VERTICAL);
@@ -239,7 +241,7 @@ public class MainActivity extends Activity {
         settings.addView(speedSeek, lp(-1, -2));
 
         TextView tips = new TextView(this);
-        tips.setText("提示：v3 已把手势模块从启动流程中隔离。请先确认 APP 能正常打开，再点连接测试，最后开启摄像头手势控制。手势控制需要摄像头权限和 assets/hand_landmarker.task 模型文件。若左右反了，就切换“左右镜像”。");
+        tips.setText("提示：v4 已完整检查启动路径：启动阶段不自动连网，不自动打开摄像头，不主动加载 MediaPipe 类；CrashHandler 已前移到 Application。请先点连接测试，再开启摄像头手势控制。手势模型文件必须是 assets/hand_landmarker.task。若左右反了，就切换“左右镜像”。");
         tips.setTextColor(Color.rgb(100, 106, 118));
         tips.setTextSize(13);
         tips.setPadding(0, dp(8), 0, dp(20));
@@ -253,7 +255,9 @@ public class MainActivity extends Activity {
         testBtn.setOnClickListener(v -> {
             applyTarget();
             savePrefs();
-            checkStatus();
+            // 不再启动时自动请求 /status，避免把网络/接收端问题误判成启动闪退。
+        // 进入界面后请手动点“连接测试”。
+        setStatus("已启动。请先点连接测试，再开启摄像头手势控制。", true);
         });
         tapBtn.setOnClickListener(v -> {
             applyTarget();
