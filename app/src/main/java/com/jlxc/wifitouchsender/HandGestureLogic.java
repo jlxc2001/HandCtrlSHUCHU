@@ -128,7 +128,7 @@ public class HandGestureLogic {
             smoothX = cx;
             smoothY = cy;
         } else {
-            float alpha = 0.34f;
+            float alpha = 0.62f; // v5.6：降低光标平滑带来的拖尾，提高手跟随响应
             smoothX += (cx - smoothX) * alpha;
             smoothY += (cy - smoothY) * alpha;
         }

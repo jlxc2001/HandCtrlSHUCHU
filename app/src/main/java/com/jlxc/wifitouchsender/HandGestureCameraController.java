@@ -74,6 +74,13 @@ public class HandGestureCameraController implements GestureController {
     private boolean frontCamera = true;
     private boolean running = false;
     private Size selectedSize = new Size(320, 240);
+    private long lastInferStartMs = 0L;
+    private long lastMetricMs = 0L;
+    private int inferFrameCount = 0;
+    private long lastInferCostMs = 0L;
+    private long lastFrameDropCount = 0L;
+    private boolean fastImagePathOk = true;
+    private static final long MIN_INFER_INTERVAL_MS = 33L;
 
     public HandGestureCameraController(Context context, TextureView previewView, GestureEventListener listener) {
         this.context = context.getApplicationContext();
@@ -100,7 +107,7 @@ public class HandGestureCameraController implements GestureController {
         } else {
             previewView.setSurfaceTextureListener(surfaceTextureListener);
         }
-        listener.onStatus("摄像头预览启动中：本版不会自动加载 MediaPipe，避免原生库崩溃导致看不到画面。", true);
+        listener.onStatus("摄像头预览启动中：v5.6 会先显示预览，模型加载后叠加骨骼并显示耗时。", true);
     }
 
     @Override
@@ -149,6 +156,9 @@ public class HandGestureCameraController implements GestureController {
                 .setMinTrackingConfidence(0.45f)
                 .build();
         handLandmarker = HandLandmarker.createFromOptions(context, options);
+        lastMetricMs = android.os.SystemClock.uptimeMillis();
+        inferFrameCount = 0;
+        lastFrameDropCount = 0;
     }
 
     private ByteBuffer loadModelBufferFromAssets() throws IOException {
@@ -282,10 +292,10 @@ public class HandGestureCameraController implements GestureController {
                 int w = s.getWidth();
                 int h = s.getHeight();
                 int area = w * h;
-                int target = 640 * 480;
-                int areaPenalty = Math.abs(area - target) / 1000;
+                int target = 320 * 240;
+                int areaPenalty = Math.abs(area - target) / 700;
                 int aspectPenalty = Math.abs(w * 3 - h * 4); // prefer 4:3 because hands fill frame well
-                int hugePenalty = area > 1280 * 720 ? 10000 : 0;
+                int hugePenalty = area > 640 * 480 ? 12000 : 0;
                 int tinyPenalty = area < 320 * 240 ? 5000 : 0;
                 return areaPenalty + aspectPenalty + hugePenalty + tinyPenalty;
             }
@@ -326,16 +336,28 @@ public class HandGestureCameraController implements GestureController {
             texture.setDefaultBufferSize(selectedSize.getWidth(), selectedSize.getHeight());
             Surface previewSurface = new Surface(texture);
 
-            imageReader = ImageReader.newInstance(selectedSize.getWidth(), selectedSize.getHeight(), ImageFormat.YUV_420_888, 2);
+            imageReader = ImageReader.newInstance(selectedSize.getWidth(), selectedSize.getHeight(), ImageFormat.YUV_420_888, 3);
             imageReader.setOnImageAvailableListener(reader -> {
                 Image image = null;
                 try {
                     image = reader.acquireLatestImage();
                     if (image == null) return;
-                    if (!inferBusy.compareAndSet(false, true)) {
+                    if (handLandmarker == null) {
                         image.close();
                         return;
                     }
+                    long now = android.os.SystemClock.uptimeMillis();
+                    if (now - lastInferStartMs < MIN_INFER_INTERVAL_MS) {
+                        lastFrameDropCount++;
+                        image.close();
+                        return;
+                    }
+                    if (!inferBusy.compareAndSet(false, true)) {
+                        lastFrameDropCount++;
+                        image.close();
+                        return;
+                    }
+                    lastInferStartMs = now;
                     final Image img = image;
                     image = null;
                     inferExecutor.execute(() -> analyzeImage(img));
@@ -358,7 +380,7 @@ public class HandGestureCameraController implements GestureController {
                     try {
                         session.setRepeatingRequest(builder.build(), null, cameraHandler);
                         listener.onStatus(handLandmarker == null
-                                ? "摄像头预览已启动。确认有画面后，再手动点击‘加载模型/启用识别’。"
+                                ? "摄像头预览已启动，分析尺寸 " + selectedSize.getWidth() + "×" + selectedSize.getHeight() + "。确认有画面后，再手动点击‘加载模型’。"
                                 : "手势识别已启动：半捏移动，捏合点击，L返回，五指HOME", true);
                     } catch (Throwable e) {
                         listener.onStatus("启动预览失败：" + safeMsg(e), false);
@@ -374,11 +396,26 @@ public class HandGestureCameraController implements GestureController {
     }
 
     private void analyzeImage(Image image) {
+        long start = android.os.SystemClock.uptimeMillis();
+        Bitmap fallbackBitmap = null;
         try {
             if (!running || handLandmarker == null) return;
-            Bitmap bitmap = imageToBitmap(image, getRotationDegrees());
-            MPImage mpImage = new BitmapImageBuilder(bitmap).build();
-            HandLandmarkerResult result = handLandmarker.detect(mpImage);
+            HandLandmarkerResult result;
+            if (fastImagePathOk) {
+                try {
+                    result = detectWithMediaImageBuilder(image, getRotationDegrees());
+                } catch (Throwable fastError) {
+                    fastImagePathOk = false;
+                    fallbackBitmap = imageToBitmap(image, getRotationDegrees());
+                    MPImage mpImage = new BitmapImageBuilder(fallbackBitmap).build();
+                    result = handLandmarker.detect(mpImage);
+                }
+            } else {
+                fallbackBitmap = imageToBitmap(image, getRotationDegrees());
+                MPImage mpImage = new BitmapImageBuilder(fallbackBitmap).build();
+                result = handLandmarker.detect(mpImage);
+            }
+
             if (result != null && !result.landmarks().isEmpty()) {
                 List<com.google.mediapipe.tasks.components.containers.NormalizedLandmark> hand = result.landmarks().get(0);
                 float[] xy = new float[42];
@@ -390,13 +427,40 @@ public class HandGestureCameraController implements GestureController {
             } else {
                 listener.onNoHand();
             }
-            bitmap.recycle();
         } catch (Throwable e) {
             listener.onStatus("手势识别失败：" + safeMsg(e), false);
         } finally {
+            lastInferCostMs = android.os.SystemClock.uptimeMillis() - start;
+            inferFrameCount++;
+            long now = android.os.SystemClock.uptimeMillis();
+            if (now - lastMetricMs >= 500) {
+                float fps = inferFrameCount * 1000f / Math.max(1, now - lastMetricMs);
+                listener.onMetrics(String.format(java.util.Locale.US,
+                        "识别FPS %.1f | 推理 %dms | 分析 %dx%d | 丢帧=%d | 图像路径=%s",
+                        fps, lastInferCostMs, selectedSize.getWidth(), selectedSize.getHeight(),
+                        lastFrameDropCount, fastImagePathOk ? "MediaImage" : "Bitmap/JPEG"));
+                inferFrameCount = 0;
+                lastFrameDropCount = 0;
+                lastMetricMs = now;
+            }
+            try { if (fallbackBitmap != null) fallbackBitmap.recycle(); } catch (Exception ignored) {}
             try { image.close(); } catch (Exception ignored) {}
             inferBusy.set(false);
         }
+    }
+
+    private HandLandmarkerResult detectWithMediaImageBuilder(Image image, int rotateDegrees) throws Exception {
+        // 通过反射使用 MediaImageBuilder，避免硬依赖某个 MediaPipe 版本的编译期 API。
+        // 成功时可绕开 YUV->JPEG->Bitmap，延迟明显低于旧路径。
+        Class<?> cls = Class.forName("com.google.mediapipe.framework.image.MediaImageBuilder");
+        Object builder = cls.getConstructor(Image.class).newInstance(image);
+        try {
+            cls.getMethod("setRotation", int.class).invoke(builder, rotateDegrees);
+        } catch (NoSuchMethodException ignored) {
+            // 老版本如果没有 setRotation，就直接使用原图方向。
+        }
+        MPImage mpImage = (MPImage) cls.getMethod("build").invoke(builder);
+        return handLandmarker.detect(mpImage);
     }
 
     private int getRotationDegrees() {

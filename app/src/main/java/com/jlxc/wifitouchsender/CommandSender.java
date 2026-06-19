@@ -17,6 +17,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class CommandSender {
     public interface Callback {
@@ -35,9 +36,29 @@ public class CommandSender {
     }
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final ExecutorService cursorExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final AtomicBoolean cursorWorkerActive = new AtomicBoolean(false);
+
     private String host = "192.168.100.124";
     private int port = 47220;
+
+    private volatile float latestCursorX = 0f;
+    private volatile float latestCursorY = 0f;
+    private volatile long cursorSeq = 0L;
+    private volatile long cursorSentSeq = 0L;
+    private volatile int cursorSentCount = 0;
+    private volatile int cursorErrorCount = 0;
+    private volatile long cursorLastMs = 0L;
+    private volatile MetricsListener metricsListener;
+
+    public interface MetricsListener {
+        void onCursorMetrics(String text);
+    }
+
+    public void setMetricsListener(MetricsListener listener) {
+        this.metricsListener = listener;
+    }
 
     public void setTarget(String host, int port) {
         this.host = host == null ? "" : host.trim();
@@ -57,10 +78,52 @@ public class CommandSender {
     }
 
     public void set(float x, float y) {
-        Map<String, String> p = new LinkedHashMap<>();
-        p.put("x", trim(x));
-        p.put("y", trim(y));
-        postAsync("/api/set", p, null);
+        // 高频光标移动使用“最新值覆盖”而不是排队。
+        // 如果网络慢，只发送最新坐标，避免 HTTP 请求堆积造成拖尾。
+        latestCursorX = x;
+        latestCursorY = y;
+        cursorSeq++;
+        startCursorWorkerIfNeeded();
+    }
+
+    private void startCursorWorkerIfNeeded() {
+        if (cursorWorkerActive.compareAndSet(false, true)) {
+            cursorExecutor.execute(this::cursorWorkerLoop);
+        }
+    }
+
+    private void cursorWorkerLoop() {
+        try {
+            while (true) {
+                long seq = cursorSeq;
+                if (seq == cursorSentSeq) break;
+
+                Map<String, String> p = new LinkedHashMap<>();
+                p.put("x", trim(latestCursorX));
+                p.put("y", trim(latestCursorY));
+                long start = android.os.SystemClock.uptimeMillis();
+                boolean ok = true;
+                try {
+                    request("POST", "/api/set", encode(p), 120, 160, true);
+                    cursorSentCount++;
+                } catch (Exception e) {
+                    ok = false;
+                    cursorErrorCount++;
+                }
+                cursorLastMs = android.os.SystemClock.uptimeMillis() - start;
+                cursorSentSeq = seq;
+                MetricsListener ml = metricsListener;
+                if (ml != null) {
+                    long pending = Math.max(0, cursorSeq - cursorSentSeq);
+                    String text = "HTTP坐标 " + cursorLastMs + "ms | 已发=" + cursorSentCount +
+                            " | 待合并=" + pending + " | 错误=" + cursorErrorCount + (ok ? "" : " | 最近失败");
+                    mainHandler.post(() -> ml.onCursorMetrics(text));
+                }
+            }
+        } finally {
+            cursorWorkerActive.set(false);
+            if (cursorSeq != cursorSentSeq) startCursorWorkerIfNeeded();
+        }
     }
 
     public void scroll(float dy) {
@@ -79,7 +142,7 @@ public class CommandSender {
     public void status(StatusCallback cb) {
         executor.execute(() -> {
             try {
-                String raw = request("GET", "/status", "");
+                String raw = request("GET", "/status", "", 500, 900, false);
                 Status s = parseStatus(raw);
                 mainHandler.post(() -> cb.onStatus(s, null));
             } catch (Exception e) {
@@ -97,7 +160,7 @@ public class CommandSender {
             boolean ok = true;
             String text;
             try {
-                text = request("POST", path, encode(params));
+                text = request("POST", path, encode(params), 500, 900, false);
                 try {
                     JSONObject obj = new JSONObject(text);
                     ok = obj.optBoolean("ok", true);
@@ -120,14 +183,14 @@ public class CommandSender {
         });
     }
 
-    private String request(String method, String path, String body) throws Exception {
+    private String request(String method, String path, String body, int connectTimeoutMs, int readTimeoutMs, boolean fastCursor) throws Exception {
         URL url = new URL(getBaseUrl() + path);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod(method);
-        conn.setConnectTimeout(500);
-        conn.setReadTimeout(900);
+        conn.setConnectTimeout(connectTimeoutMs);
+        conn.setReadTimeout(readTimeoutMs);
         conn.setUseCaches(false);
-        conn.setRequestProperty("Connection", "close");
+        conn.setRequestProperty("Connection", "keep-alive");
         if ("POST".equals(method)) {
             byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
             conn.setDoOutput(true);

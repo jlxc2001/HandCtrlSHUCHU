@@ -15,6 +15,7 @@ import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.CompoundButton;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Switch;
@@ -33,6 +34,7 @@ public class HandGestureActivity extends Activity {
     private TextView statusText;
     private TextView debugText;
     private TextureView preview;
+    private HandSkeletonOverlayView skeletonOverlay;
     private Switch mirrorSwitch;
     private Switch autoStartSwitch;
 
@@ -43,15 +45,24 @@ public class HandGestureActivity extends Activity {
     private long lastSetSendTime = 0L;
     private float lastSetX = -1f;
     private float lastSetY = -1f;
+    private long lastNoHandUiTime = 0L;
+
+    private String gestureInfo = "未检测";
+    private String perfInfo = "识别未启动";
+    private String netInfo = "网络未发送";
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         buildUi();
         setupLogic();
+        sender.setMetricsListener(text -> {
+            netInfo = text;
+            renderDebug(true);
+        });
         loadPrefs();
         applyTarget();
-        setStatus("手势页面已打开。先点连接测试，再点开始手势。", true);
+        setStatus("手势页面已打开。建议先点连接测试，再启动摄像头，最后加载模型。", true);
     }
 
     @Override protected void onPause() {
@@ -73,14 +84,14 @@ public class HandGestureActivity extends Activity {
         scroll.addView(root, new ScrollView.LayoutParams(-1, -2));
 
         TextView title = new TextView(this);
-        title.setText("摄像头手势控制 v5.4");
+        title.setText("摄像头手势控制 v5.6 性能版");
         title.setTextSize(24);
         title.setTextColor(Color.rgb(20, 24, 31));
         title.setGravity(Gravity.CENTER_VERTICAL);
         root.addView(title, lp(-1, -2));
 
         TextView desc = new TextView(this);
-        desc.setText("半捏移动光标，拇指食指捏合点击，L 形返回，五指张开 HOME。该页面才会加载摄像头和 MediaPipe。");
+        desc.setText("半捏移动光标，拇指食指捏合点击，L 形返回，五指张开 HOME。v5.6 加入手部骨骼叠加、识别/网络耗时显示和高频坐标合并发送。 ");
         desc.setTextSize(14);
         desc.setTextColor(Color.rgb(85, 91, 103));
         desc.setPadding(0, dp(6), 0, dp(10));
@@ -130,12 +141,14 @@ public class HandGestureActivity extends Activity {
         autoStartSwitch.setTextColor(Color.rgb(35, 41, 50));
         root.addView(autoStartSwitch, lp(-1, -2));
 
+        FrameLayout previewBox = new FrameLayout(this);
         preview = new TextureView(this);
-        // TextureView cannot have a background drawable on Android; setting one crashes on some devices.
-        // Keep it transparent and use the parent layout background instead.
+        skeletonOverlay = new HandSkeletonOverlayView(this);
+        previewBox.addView(preview, new FrameLayout.LayoutParams(-1, -1));
+        previewBox.addView(skeletonOverlay, new FrameLayout.LayoutParams(-1, -1));
         LinearLayout.LayoutParams previewLp = new LinearLayout.LayoutParams(-1, dp(330));
         previewLp.topMargin = dp(10);
-        root.addView(preview, previewLp);
+        root.addView(previewBox, previewLp);
 
         statusText = new TextView(this);
         statusText.setTextSize(13);
@@ -146,7 +159,6 @@ public class HandGestureActivity extends Activity {
         root.addView(statusText, statusLp);
 
         debugText = new TextView(this);
-        debugText.setText("调试：未启动");
         debugText.setTextSize(13);
         debugText.setTextColor(Color.rgb(65, 72, 85));
         debugText.setPadding(dp(10), dp(8), dp(10), dp(8));
@@ -154,9 +166,10 @@ public class HandGestureActivity extends Activity {
         LinearLayout.LayoutParams debugLp = lp(-1, -2);
         debugLp.topMargin = dp(8);
         root.addView(debugText, debugLp);
+        renderDebug(true);
 
         TextView tips = new TextView(this);
-        tips.setText("v5.4 仍然保持两阶段：先启动摄像头预览，再加载模型。本版将 MediaPipe 回退到 0.10.15，并且不再用 setModelAssetPath，而是用 noCompress + openFd + MappedByteBuffer + CPU Delegate 加载 assets/models/hand_landmarker.task，用来绕开你设备上 nativeStartRunningGraph 的路径/模型初始化崩溃。");
+        tips.setText("性能判断：如果骨骼跟手但车机光标慢，多半是网络/接收端 HTTP 链路慢；如果骨骼本身也一卡一卡，就是本机识别链路慢。v5.6 会把坐标请求合并，只发最新点，避免网络请求堆积拖尾。后续接收端若加入 UDP 坐标接口，延迟还能继续下降。 ");
         tips.setTextSize(13);
         tips.setTextColor(Color.rgb(100, 106, 118));
         tips.setPadding(0, dp(8), 0, dp(20));
@@ -168,6 +181,7 @@ public class HandGestureActivity extends Activity {
         stopBtn.setOnClickListener(v -> stopGesture());
         mirrorSwitch.setOnCheckedChangeListener((CompoundButton b, boolean checked) -> {
             if (logic != null) logic.setMirrorX(checked);
+            if (skeletonOverlay != null) skeletonOverlay.setMirrorX(checked);
             savePrefs();
         });
         autoStartSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> savePrefs());
@@ -178,10 +192,10 @@ public class HandGestureActivity extends Activity {
     private void setupLogic() {
         logic = new HandGestureLogic(new HandGestureLogic.Listener() {
             @Override public void onCursor(float nx, float ny) { sendCursor(nx, ny); }
-            @Override public void onClick() { sender.tap(HandGestureActivity.this::showCommandResult); setDebug("动作：捏合点击", true); }
-            @Override public void onBack() { sender.back(HandGestureActivity.this::showCommandResult); setDebug("动作：L 形返回", true); }
-            @Override public void onHome() { sender.home(HandGestureActivity.this::showCommandResult); setDebug("动作：五指 HOME", true); }
-            @Override public void onDebug(String text) { setDebug(text, true); }
+            @Override public void onClick() { sender.tap(HandGestureActivity.this::showCommandResult); gestureInfo = "动作：捏合点击"; renderDebug(true); }
+            @Override public void onBack() { sender.back(HandGestureActivity.this::showCommandResult); gestureInfo = "动作：L 形返回"; renderDebug(true); }
+            @Override public void onHome() { sender.home(HandGestureActivity.this::showCommandResult); gestureInfo = "动作：五指 HOME"; renderDebug(true); }
+            @Override public void onDebug(String text) { gestureInfo = text; renderDebug(true); }
         });
     }
 
@@ -196,6 +210,10 @@ public class HandGestureActivity extends Activity {
             if (logic != null) {
                 logic.setMirrorX(mirrorSwitch.isChecked());
                 logic.reset();
+            }
+            if (skeletonOverlay != null) {
+                skeletonOverlay.setMirrorX(mirrorSwitch.isChecked());
+                skeletonOverlay.clear();
             }
             if (controller == null) controller = new HandGestureCameraController(this, preview, createGestureListener());
             controller.start();
@@ -220,7 +238,7 @@ public class HandGestureActivity extends Activity {
                 logic.setMirrorX(mirrorSwitch.isChecked());
                 logic.reset();
             }
-            setDebug("正在加载 MediaPipe 模型：v5.4 使用 Buffer + CPU 模式。如果这里仍直接闪退，基本就是当前 MediaPipe AAR 与这台 Android 16/OPPO 系统不兼容。", false);
+            setDebug("正在加载 MediaPipe 模型。加载成功后会显示手部骨骼和识别/网络耗时。", true);
             controller.loadModel();
         } catch (Throwable e) {
             setDebug("加载模型失败：" + compact(e), false);
@@ -230,16 +248,31 @@ public class HandGestureActivity extends Activity {
     private GestureEventListener createGestureListener() {
         return new GestureEventListener() {
             @Override public void onHandLandmarks(float[] xy) {
-                mainHandler.post(() -> logic.process(xy));
+                mainHandler.post(() -> {
+                    if (skeletonOverlay != null) skeletonOverlay.setLandmarks(xy);
+                    if (logic != null) logic.process(xy);
+                });
             }
             @Override public void onNoHand() {
                 mainHandler.post(() -> {
+                    if (skeletonOverlay != null) skeletonOverlay.clear();
                     if (logic != null) logic.reset();
-                    setDebug("未检测到手", false);
+                    long now = android.os.SystemClock.uptimeMillis();
+                    if (now - lastNoHandUiTime > 300) {
+                        lastNoHandUiTime = now;
+                        gestureInfo = "未检测到手";
+                        renderDebug(false);
+                    }
                 });
             }
             @Override public void onStatus(String text, boolean ok) {
                 mainHandler.post(() -> setDebug(text, ok));
+            }
+            @Override public void onMetrics(String text) {
+                mainHandler.post(() -> {
+                    perfInfo = text;
+                    renderDebug(true);
+                });
             }
         };
     }
@@ -248,6 +281,7 @@ public class HandGestureActivity extends Activity {
         try {
             if (controller != null) controller.stop();
         } catch (Throwable ignored) {}
+        if (skeletonOverlay != null) skeletonOverlay.clear();
         setDebug("手势已停止", true);
     }
 
@@ -260,11 +294,10 @@ public class HandGestureActivity extends Activity {
     }
 
     private void sendCursor(float nx, float ny) {
-        applyTarget();
         float x = nx * Math.max(1, remoteScreenW - 1);
         float y = ny * Math.max(1, remoteScreenH - 1);
         long now = android.os.SystemClock.uptimeMillis();
-        if (now - lastSetSendTime >= 30 || Math.abs(x - lastSetX) > 10 || Math.abs(y - lastSetY) > 10) {
+        if (now - lastSetSendTime >= 16 || Math.abs(x - lastSetX) > 5 || Math.abs(y - lastSetY) > 5) {
             lastSetSendTime = now;
             lastSetX = x;
             lastSetY = y;
@@ -308,6 +341,7 @@ public class HandGestureActivity extends Activity {
         mirrorSwitch.setChecked(sp.getBoolean("mirrorX", true));
         autoStartSwitch.setChecked(sp.getBoolean("gestureAutoStart", false));
         if (logic != null) logic.setMirrorX(mirrorSwitch.isChecked());
+        if (skeletonOverlay != null) skeletonOverlay.setMirrorX(mirrorSwitch.isChecked());
         if (autoStartSwitch.isChecked()) preview.postDelayed(this::startGesture, 250);
     }
 
@@ -328,8 +362,13 @@ public class HandGestureActivity extends Activity {
     }
 
     private void setDebug(String text, boolean ok) {
+        gestureInfo = text;
+        renderDebug(ok);
+    }
+
+    private void renderDebug(boolean ok) {
         if (debugText == null) return;
-        debugText.setText("调试：" + text);
+        debugText.setText("手势：" + gestureInfo + "\n性能：" + perfInfo + "\n网络：" + netInfo);
         debugText.setTextColor(ok ? Color.rgb(32, 103, 51) : Color.rgb(170, 36, 42));
     }
 

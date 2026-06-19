@@ -4,4 +4,5 @@ public interface GestureEventListener {
     void onHandLandmarks(float[] xy);
     void onNoHand();
     void onStatus(String text, boolean ok);
+    void onMetrics(String text);
 }
