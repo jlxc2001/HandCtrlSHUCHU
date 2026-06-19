@@ -97,14 +97,20 @@ public class HandGestureCameraController implements GestureController {
         } else {
             previewView.setSurfaceTextureListener(surfaceTextureListener);
         }
+        listener.onStatus("摄像头预览启动中：本版不会自动加载 MediaPipe，避免原生库崩溃导致看不到画面。", true);
+    }
 
-        try {
-            setupHandLandmarker();
-            listener.onStatus("手部模型已加载：摄像头预览启动后即可识别手势", true);
-        } catch (Throwable e) {
-            listener.onStatus("手部模型初始化失败：" + safeMsg(e) + "。摄像头预览仍会尝试打开，但手势识别暂不可用。请确认模型路径为 assets/models/hand_landmarker.task。", false);
-            closeHandLandmarker();
+    @Override
+    public void loadModel() {
+        if (handLandmarker != null) {
+            listener.onStatus("手部模型已经加载", true);
+            return;
         }
+        // 注意：当前用户设备上 MediaPipe createFromOptions 发生 native SIGSEGV，
+        // Java try/catch 无法拦截。此方法只在用户手动点击“加载模型”时调用，
+        // 先保证摄像头预览能够单独工作。
+        setupHandLandmarker();
+        listener.onStatus("手部模型已加载：开始识别手势", true);
     }
 
     @Override
@@ -294,7 +300,9 @@ public class HandGestureCameraController implements GestureController {
                     captureSession = session;
                     try {
                         session.setRepeatingRequest(builder.build(), null, cameraHandler);
-                        listener.onStatus("手势识别已启动：半捏移动，捏合点击，L返回，五指HOME", true);
+                        listener.onStatus(handLandmarker == null
+                                ? "摄像头预览已启动。确认有画面后，再手动点击‘加载模型/启用识别’。"
+                                : "手势识别已启动：半捏移动，捏合点击，L返回，五指HOME", true);
                     } catch (Throwable e) {
                         listener.onStatus("启动预览失败：" + safeMsg(e), false);
                     }

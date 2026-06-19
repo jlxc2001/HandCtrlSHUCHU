@@ -1,3 +1,12 @@
+# WiFiTouchSender HandGesture v5.3
+
+本版修正方向：两阶段启动。
+
+1. 点击「启动摄像头」只打开 Camera2 预览，不自动加载 MediaPipe。
+2. 确认预览有画面后，再点击「加载模型」。
+3. 如果加载模型时闪退，说明问题集中在 MediaPipe native `HandLandmarker.createFromOptions()`，不是摄像头权限或 Camera2 预览问题。
+
+模型路径：`app/src/main/assets/models/hand_landmarker.task`。GitHub Actions 会自动下载。
 # WiFiTouchSender HandGesture v5.2
 
 修复内容：

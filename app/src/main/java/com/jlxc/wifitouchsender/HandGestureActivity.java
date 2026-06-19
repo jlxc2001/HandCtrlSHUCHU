@@ -73,7 +73,7 @@ public class HandGestureActivity extends Activity {
         scroll.addView(root, new ScrollView.LayoutParams(-1, -2));
 
         TextView title = new TextView(this);
-        title.setText("摄像头手势控制 v5.2");
+        title.setText("摄像头手势控制 v5.3");
         title.setTextSize(24);
         title.setTextColor(Color.rgb(20, 24, 31));
         title.setGravity(Gravity.CENTER_VERTICAL);
@@ -110,10 +110,12 @@ public class HandGestureActivity extends Activity {
         root.addView(btnRow, lp(-1, -2));
 
         Button testBtn = button("连接测试");
-        Button startBtn = button("开始手势");
+        Button startBtn = button("启动摄像头");
+        Button modelBtn = button("加载模型");
         Button stopBtn = button("停止");
         btnRow.addView(testBtn, weightLp());
         btnRow.addView(startBtn, weightLpMargin());
+        btnRow.addView(modelBtn, weightLpMargin());
         btnRow.addView(stopBtn, weightLpMargin());
 
         mirrorSwitch = new Switch(this);
@@ -154,7 +156,7 @@ public class HandGestureActivity extends Activity {
         root.addView(debugText, debugLp);
 
         TextView tips = new TextView(this);
-        tips.setText("如果进入本页不闪退，但点开始手势闪退，问题就在 MediaPipe / 模型 / 摄像头链路。若开始后只显示未检测到手，先把手放到前摄画面中央。模型文件必须在 assets/models/hand_landmarker.task。");
+        tips.setText("v5.3 改成两阶段：先启动摄像头预览，确认有画面后再手动加载 MediaPipe 模型。你这台设备日志显示摄像头能打开，但 MediaPipe createFromOptions 会触发 native SIGSEGV，所以不要一上来自动加载模型。模型文件必须在 assets/models/hand_landmarker.task。");
         tips.setTextSize(13);
         tips.setTextColor(Color.rgb(100, 106, 118));
         tips.setPadding(0, dp(8), 0, dp(20));
@@ -162,6 +164,7 @@ public class HandGestureActivity extends Activity {
 
         testBtn.setOnClickListener(v -> checkStatus());
         startBtn.setOnClickListener(v -> startGesture());
+        modelBtn.setOnClickListener(v -> loadModelOnly());
         stopBtn.setOnClickListener(v -> stopGesture());
         mirrorSwitch.setOnCheckedChangeListener((CompoundButton b, boolean checked) -> {
             if (logic != null) logic.setMirrorX(checked);
@@ -197,7 +200,30 @@ public class HandGestureActivity extends Activity {
             if (controller == null) controller = new HandGestureCameraController(this, preview, createGestureListener());
             controller.start();
         } catch (Throwable e) {
-            setDebug("启动手势失败：" + compact(e), false);
+            setDebug("启动摄像头失败：" + compact(e), false);
+        }
+    }
+
+    private void loadModelOnly() {
+        applyTarget();
+        savePrefs();
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.CAMERA}, REQ_CAMERA);
+            return;
+        }
+        try {
+            if (controller == null || !controller.isRunning()) {
+                setDebug("请先点击‘启动摄像头’，确认能看到预览画面后再加载模型。", false);
+                return;
+            }
+            if (logic != null) {
+                logic.setMirrorX(mirrorSwitch.isChecked());
+                logic.reset();
+            }
+            setDebug("正在加载 MediaPipe 模型。如果这里直接闪退，说明是 MediaPipe 原生库兼容问题，不是摄像头问题。", false);
+            controller.loadModel();
+        } catch (Throwable e) {
+            setDebug("加载模型失败：" + compact(e), false);
         }
     }
 
