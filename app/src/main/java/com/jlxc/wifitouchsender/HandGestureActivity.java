@@ -73,7 +73,7 @@ public class HandGestureActivity extends Activity {
         scroll.addView(root, new ScrollView.LayoutParams(-1, -2));
 
         TextView title = new TextView(this);
-        title.setText("摄像头手势控制 v5");
+        title.setText("摄像头手势控制 v5.1");
         title.setTextSize(24);
         title.setTextColor(Color.rgb(20, 24, 31));
         title.setGravity(Gravity.CENTER_VERTICAL);
@@ -129,7 +129,8 @@ public class HandGestureActivity extends Activity {
         root.addView(autoStartSwitch, lp(-1, -2));
 
         preview = new TextureView(this);
-        preview.setBackgroundColor(Color.BLACK);
+        // TextureView cannot have a background drawable on Android; setting one crashes on some devices.
+        // Keep it transparent and use the parent layout background instead.
         LinearLayout.LayoutParams previewLp = new LinearLayout.LayoutParams(-1, dp(330));
         previewLp.topMargin = dp(10);
         root.addView(preview, previewLp);
