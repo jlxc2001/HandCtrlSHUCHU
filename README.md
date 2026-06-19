@@ -1,4 +1,4 @@
-# WiFiTouchSender HandGesture v5.1
+# WiFiTouchSender HandGesture v5.2
 
 修复内容：
 
@@ -15,3 +15,10 @@
 5. 若页面正常打开，再点击“开始手势”。
 
 如果点“开始手势”后再闪退，再抓新的 log；那时问题才进入 MediaPipe / 摄像头链路。
+
+
+## v5.2 修复
+
+- MediaPipe 模型移动到 `app/src/main/assets/models/hand_landmarker.task`。
+- Java 代码使用 `setModelAssetPath("models/hand_landmarker.task")`，避免 `hand_landmarker.task doesn't have a slash in it`。
+- 即使模型初始化失败，也会先尝试打开摄像头预览，方便区分摄像头问题和模型问题。

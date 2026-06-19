@@ -73,7 +73,7 @@ public class HandGestureActivity extends Activity {
         scroll.addView(root, new ScrollView.LayoutParams(-1, -2));
 
         TextView title = new TextView(this);
-        title.setText("摄像头手势控制 v5.1");
+        title.setText("摄像头手势控制 v5.2");
         title.setTextSize(24);
         title.setTextColor(Color.rgb(20, 24, 31));
         title.setGravity(Gravity.CENTER_VERTICAL);
@@ -154,7 +154,7 @@ public class HandGestureActivity extends Activity {
         root.addView(debugText, debugLp);
 
         TextView tips = new TextView(this);
-        tips.setText("如果进入本页不闪退，但点开始手势闪退，问题就在 MediaPipe / 模型 / 摄像头链路。若开始后只显示未检测到手，先把手放到前摄画面中央。模型文件必须在 assets/hand_landmarker.task。");
+        tips.setText("如果进入本页不闪退，但点开始手势闪退，问题就在 MediaPipe / 模型 / 摄像头链路。若开始后只显示未检测到手，先把手放到前摄画面中央。模型文件必须在 assets/models/hand_landmarker.task。");
         tips.setTextSize(13);
         tips.setTextColor(Color.rgb(100, 106, 118));
         tips.setPadding(0, dp(8), 0, dp(20));

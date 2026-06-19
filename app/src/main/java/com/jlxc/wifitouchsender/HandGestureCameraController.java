@@ -45,7 +45,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class HandGestureCameraController implements GestureController {
 
-    private static final String MODEL_FILE = "hand_landmarker.task";
+    private static final String MODEL_FILE = "models/hand_landmarker.task";
     private static final SparseIntArray ORIENTATIONS = new SparseIntArray();
     static {
         ORIENTATIONS.append(Surface.ROTATION_0, 0);
@@ -90,19 +90,20 @@ public class HandGestureCameraController implements GestureController {
             listener.onStatus("没有摄像头权限", false);
             return;
         }
-        try {
-            setupHandLandmarker();
-        } catch (Throwable e) {
-            listener.onStatus("手部模型初始化失败：" + safeMsg(e) + "。请确认 assets/hand_landmarker.task 已存在；MediaPipe 依赖版本为 0.10.26.1，面向 arm64/16KB page size 新机。", false);
-            closeHandLandmarker();
-            return;
-        }
         startThreads();
         running = true;
         if (previewView.isAvailable()) {
             openCamera();
         } else {
             previewView.setSurfaceTextureListener(surfaceTextureListener);
+        }
+
+        try {
+            setupHandLandmarker();
+            listener.onStatus("手部模型已加载：摄像头预览启动后即可识别手势", true);
+        } catch (Throwable e) {
+            listener.onStatus("手部模型初始化失败：" + safeMsg(e) + "。摄像头预览仍会尝试打开，但手势识别暂不可用。请确认模型路径为 assets/models/hand_landmarker.task。", false);
+            closeHandLandmarker();
         }
     }
 
