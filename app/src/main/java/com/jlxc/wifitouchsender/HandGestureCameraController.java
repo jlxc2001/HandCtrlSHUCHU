@@ -2,6 +2,7 @@ package com.jlxc.wifitouchsender;
 
 import android.Manifest;
 import android.content.Context;
+import android.content.res.AssetFileDescriptor;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -29,12 +30,17 @@ import android.view.WindowManager;
 import com.google.mediapipe.framework.image.BitmapImageBuilder;
 import com.google.mediapipe.framework.image.MPImage;
 import com.google.mediapipe.tasks.core.BaseOptions;
+import com.google.mediapipe.tasks.core.Delegate;
 import com.google.mediapipe.tasks.vision.core.RunningMode;
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker;
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult;
 
 import java.io.ByteArrayOutputStream;
+import java.io.FileInputStream;
+import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.MappedByteBuffer;
+import java.nio.channels.FileChannel;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
@@ -123,8 +129,20 @@ public class HandGestureCameraController implements GestureController {
     }
 
     private void setupHandLandmarker() {
+        // v5.4: 不再使用 setModelAssetPath()。
+        // 用户设备在 createFromOptions/nativeStartRunningGraph 阶段出现 SIGSEGV。
+        // 这里改用 noCompress + openFd + MappedByteBuffer，把模型以直接缓冲区方式交给 MediaPipe，
+        // 并显式指定 CPU delegate，绕开 asset path/native 字符串路径链路。
+        MappedByteBuffer modelBuffer;
+        try {
+            modelBuffer = loadModelBufferFromAssets();
+        } catch (IOException e) {
+            throw new RuntimeException("无法从 assets 读取模型 " + MODEL_FILE + "，请确认 APK 内包含 assets/" + MODEL_FILE, e);
+        }
+
         BaseOptions baseOptions = BaseOptions.builder()
-                .setModelAssetPath(MODEL_FILE)
+                .setDelegate(Delegate.CPU)
+                .setModelAssetBuffer(modelBuffer)
                 .build();
         HandLandmarker.HandLandmarkerOptions options = HandLandmarker.HandLandmarkerOptions.builder()
                 .setBaseOptions(baseOptions)
@@ -135,6 +153,24 @@ public class HandGestureCameraController implements GestureController {
                 .setMinTrackingConfidence(0.45f)
                 .build();
         handLandmarker = HandLandmarker.createFromOptions(context, options);
+    }
+
+    private MappedByteBuffer loadModelBufferFromAssets() throws IOException {
+        AssetFileDescriptor afd = null;
+        FileInputStream inputStream = null;
+        try {
+            afd = context.getAssets().openFd(MODEL_FILE);
+            inputStream = new FileInputStream(afd.getFileDescriptor());
+            FileChannel fileChannel = inputStream.getChannel();
+            return fileChannel.map(FileChannel.MapMode.READ_ONLY, afd.getStartOffset(), afd.getDeclaredLength());
+        } finally {
+            if (inputStream != null) {
+                try { inputStream.close(); } catch (IOException ignored) {}
+            }
+            if (afd != null) {
+                try { afd.close(); } catch (IOException ignored) {}
+            }
+        }
     }
 
     private void closeHandLandmarker() {

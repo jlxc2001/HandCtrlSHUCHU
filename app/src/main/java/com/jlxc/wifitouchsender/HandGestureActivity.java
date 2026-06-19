@@ -73,7 +73,7 @@ public class HandGestureActivity extends Activity {
         scroll.addView(root, new ScrollView.LayoutParams(-1, -2));
 
         TextView title = new TextView(this);
-        title.setText("摄像头手势控制 v5.3");
+        title.setText("摄像头手势控制 v5.4");
         title.setTextSize(24);
         title.setTextColor(Color.rgb(20, 24, 31));
         title.setGravity(Gravity.CENTER_VERTICAL);
@@ -156,7 +156,7 @@ public class HandGestureActivity extends Activity {
         root.addView(debugText, debugLp);
 
         TextView tips = new TextView(this);
-        tips.setText("v5.3 改成两阶段：先启动摄像头预览，确认有画面后再手动加载 MediaPipe 模型。你这台设备日志显示摄像头能打开，但 MediaPipe createFromOptions 会触发 native SIGSEGV，所以不要一上来自动加载模型。模型文件必须在 assets/models/hand_landmarker.task。");
+        tips.setText("v5.4 仍然保持两阶段：先启动摄像头预览，再加载模型。本版将 MediaPipe 回退到 0.10.15，并且不再用 setModelAssetPath，而是用 noCompress + openFd + MappedByteBuffer + CPU Delegate 加载 assets/models/hand_landmarker.task，用来绕开你设备上 nativeStartRunningGraph 的路径/模型初始化崩溃。");
         tips.setTextSize(13);
         tips.setTextColor(Color.rgb(100, 106, 118));
         tips.setPadding(0, dp(8), 0, dp(20));
@@ -220,7 +220,7 @@ public class HandGestureActivity extends Activity {
                 logic.setMirrorX(mirrorSwitch.isChecked());
                 logic.reset();
             }
-            setDebug("正在加载 MediaPipe 模型。如果这里直接闪退，说明是 MediaPipe 原生库兼容问题，不是摄像头问题。", false);
+            setDebug("正在加载 MediaPipe 模型：v5.4 使用 Buffer + CPU 模式。如果这里仍直接闪退，基本就是当前 MediaPipe AAR 与这台 Android 16/OPPO 系统不兼容。", false);
             controller.loadModel();
         } catch (Throwable e) {
             setDebug("加载模型失败：" + compact(e), false);
