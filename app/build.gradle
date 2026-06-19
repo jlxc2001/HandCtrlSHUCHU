@@ -8,8 +8,8 @@ android {
         applicationId 'com.jlxc.wifitouchsender'
         minSdk 26
         targetSdk 35
-        versionCode 3
-        versionName '1.2-hand-gesture-arm64-safe'
+        versionCode 4
+        versionName '1.3-hand-gesture-startup-safe'
 
         // This sender is intended for flagship phones only.
         // Keeping only arm64 reduces native MediaPipe packaging problems and APK size.

@@ -43,12 +43,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-public class HandGestureCameraController {
-    public interface Listener {
-        void onHandLandmarks(float[] xy);
-        void onNoHand();
-        void onStatus(String text, boolean ok);
-    }
+public class HandGestureCameraController implements GestureController {
 
     private static final String MODEL_FILE = "hand_landmarker.task";
     private static final SparseIntArray ORIENTATIONS = new SparseIntArray();
@@ -61,7 +56,7 @@ public class HandGestureCameraController {
 
     private final Context context;
     private final TextureView previewView;
-    private final Listener listener;
+    private final GestureEventListener listener;
     private final ExecutorService inferExecutor = Executors.newSingleThreadExecutor();
     private final AtomicBoolean inferBusy = new AtomicBoolean(false);
 
@@ -77,16 +72,18 @@ public class HandGestureCameraController {
     private boolean running = false;
     private Size selectedSize = new Size(320, 240);
 
-    public HandGestureCameraController(Context context, TextureView previewView, Listener listener) {
+    public HandGestureCameraController(Context context, TextureView previewView, GestureEventListener listener) {
         this.context = context.getApplicationContext();
         this.previewView = previewView;
         this.listener = listener;
     }
 
+    @Override
     public boolean isRunning() {
         return running;
     }
 
+    @Override
     public void start() {
         if (running) return;
         if (context.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
@@ -109,6 +106,7 @@ public class HandGestureCameraController {
         }
     }
 
+    @Override
     public void stop() {
         running = false;
         closeCamera();

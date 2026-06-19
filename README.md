@@ -57,3 +57,33 @@ adb logcat -c
 # 手动打开 APP，然后点击“开启摄像头手势控制”，等它闪退
 adb logcat -d -v time > wifitouchsender_gesture_crash.txt
 ```
+
+
+## v3 startup-safe 说明
+
+这版用于解决“APP 一打开就闪退 / 还没开手势就闪退”的问题。
+
+核心变化：
+
+1. `MainActivity` 不再直接引用 `HandGestureCameraController`，也不再直接引用任何 MediaPipe 类型。
+2. 手势模块通过反射懒加载，只有点“开启摄像头手势控制”时才加载 MediaPipe 和 Camera2 控制器。
+3. 如果 MediaPipe 原生库、模型文件或摄像头初始化失败，主界面应尽量保持可用，并在“手势状态”里显示错误。
+4. 仍然只面向 arm64 高性能手机，`abiFilters 'arm64-v8a'` 保留。
+
+如果这版依旧是一打开就闪退，优先抓完整 logcat，因为那就基本不是普通 Java 异常，而可能是安装包、系统环境或极早期资源/Activity 加载问题。
+
+抓启动闪退日志：
+
+```bash
+adb logcat -c
+adb shell monkey -p com.jlxc.wifitouchsender 1
+adb logcat -d -v time > wifitouchsender_startup_crash.txt
+```
+
+抓点击“开启摄像头手势控制”之后的闪退日志：
+
+```bash
+adb logcat -c
+# 手动打开 APP，点击开启摄像头手势控制，等闪退
+adb logcat -d -v time > wifitouchsender_gesture_crash.txt
+```

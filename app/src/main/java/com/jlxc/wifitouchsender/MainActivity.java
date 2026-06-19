@@ -44,7 +44,7 @@ public class MainActivity extends Activity {
     private Switch gestureSwitch;
     private Switch mirrorSwitch;
 
-    private HandGestureCameraController handCamera;
+    private GestureController handCamera;
     private HandGestureLogic gestureLogic;
 
     private float speed = 1.4f;
@@ -103,7 +103,7 @@ public class MainActivity extends Activity {
         scroll.addView(root, new ScrollView.LayoutParams(-1, -2));
 
         TextView title = new TextView(this);
-        title.setText("WiFi 鼠标输出端 + 手势识别");
+        title.setText("WiFi 鼠标输出端 + 手势识别 v3");
         title.setTextColor(Color.rgb(20, 24, 31));
         title.setTextSize(24);
         title.setGravity(Gravity.CENTER_VERTICAL);
@@ -239,7 +239,7 @@ public class MainActivity extends Activity {
         settings.addView(speedSeek, lp(-1, -2));
 
         TextView tips = new TextView(this);
-        tips.setText("提示：手势控制需要摄像头权限和 assets/hand_landmarker.task 模型文件。第一次测试建议先点连接测试，确认接收端返回屏幕尺寸后再开启手势。若左右反了，就切换“左右镜像”。");
+        tips.setText("提示：v3 已把手势模块从启动流程中隔离。请先确认 APP 能正常打开，再点连接测试，最后开启摄像头手势控制。手势控制需要摄像头权限和 assets/hand_landmarker.task 模型文件。若左右反了，就切换“左右镜像”。");
         tips.setTextColor(Color.rgb(100, 106, 118));
         tips.setTextSize(13);
         tips.setPadding(0, dp(8), 0, dp(20));
@@ -310,25 +310,49 @@ public class MainActivity extends Activity {
         gestureLogic.reset();
         try {
             if (handCamera == null) {
-                handCamera = new HandGestureCameraController(this, cameraPreview, new HandGestureCameraController.Listener() {
-                    @Override public void onHandLandmarks(float[] xy) {
-                        handler.post(() -> gestureLogic.process(xy));
-                    }
-                    @Override public void onNoHand() {
-                        handler.post(() -> {
-                            setGestureText("手势状态：未检测到手", false);
-                            gestureLogic.reset();
-                        });
-                    }
-                    @Override public void onStatus(String text, boolean ok) {
-                        handler.post(() -> setGestureText(text, ok));
-                    }
-                });
+                handCamera = createGestureControllerReflectively();
             }
-            handCamera.start();
+            if (handCamera != null) {
+                handCamera.start();
+            } else {
+                if (gestureSwitch != null) gestureSwitch.setChecked(false);
+            }
         } catch (Throwable e) {
             setGestureText("手势模块启动失败：" + e.getClass().getSimpleName() + " " + (e.getMessage() == null ? "" : e.getMessage()), false);
             if (gestureSwitch != null) gestureSwitch.setChecked(false);
+        }
+    }
+
+    /**
+     * Deliberately creates the MediaPipe camera controller through reflection.
+     * This keeps MainActivity free of direct MediaPipe/Camera controller references, so the
+     * app can still open and show diagnostics even if MediaPipe native libraries fail on a device.
+     */
+    private GestureController createGestureControllerReflectively() {
+        final GestureEventListener listener = new GestureEventListener() {
+            @Override public void onHandLandmarks(float[] xy) {
+                handler.post(() -> gestureLogic.process(xy));
+            }
+            @Override public void onNoHand() {
+                handler.post(() -> {
+                    setGestureText("手势状态：未检测到手", false);
+                    gestureLogic.reset();
+                });
+            }
+            @Override public void onStatus(String text, boolean ok) {
+                handler.post(() -> setGestureText(text, ok));
+            }
+        };
+
+        try {
+            Class<?> cls = Class.forName("com.jlxc.wifitouchsender.HandGestureCameraController");
+            Object obj = cls.getConstructor(Context.class, TextureView.class, GestureEventListener.class)
+                    .newInstance(this, cameraPreview, listener);
+            return (GestureController) obj;
+        } catch (Throwable e) {
+            setGestureText("手势控制器加载失败：" + e.getClass().getSimpleName() + " "
+                    + (e.getMessage() == null ? "" : e.getMessage()), false);
+            return null;
         }
     }
 
