@@ -4,11 +4,9 @@ import android.Manifest;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.ImageFormat;
 import android.graphics.Matrix;
 import android.graphics.SurfaceTexture;
-import android.graphics.YuvImage;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
@@ -80,7 +78,7 @@ public class HandGestureCameraController implements GestureController {
     private long lastInferCostMs = 0L;
     private long lastFrameDropCount = 0L;
     private boolean fastImagePathOk = true;
-    private static final long MIN_INFER_INTERVAL_MS = 33L;
+    private static final long MIN_INFER_INTERVAL_MS = 55L; // v5.7: 避免推理超过帧间隔时持续抢占 CPU
 
     public HandGestureCameraController(Context context, TextureView previewView, GestureEventListener listener) {
         this.context = context.getApplicationContext();
@@ -107,7 +105,7 @@ public class HandGestureCameraController implements GestureController {
         } else {
             previewView.setSurfaceTextureListener(surfaceTextureListener);
         }
-        listener.onStatus("摄像头预览启动中：v5.6 会先显示预览，模型加载后叠加骨骼并显示耗时。", true);
+        listener.onStatus("摄像头预览启动中：v5.7 会先显示预览，模型加载后使用 VIDEO 跟踪模式，并叠加骨骼/耗时。", true);
     }
 
     @Override
@@ -149,7 +147,7 @@ public class HandGestureCameraController implements GestureController {
                 .build();
         HandLandmarker.HandLandmarkerOptions options = HandLandmarker.HandLandmarkerOptions.builder()
                 .setBaseOptions(baseOptions)
-                .setRunningMode(RunningMode.IMAGE)
+                .setRunningMode(RunningMode.VIDEO)
                 .setNumHands(1)
                 .setMinHandDetectionConfidence(0.45f)
                 .setMinHandPresenceConfidence(0.45f)
@@ -408,12 +406,12 @@ public class HandGestureCameraController implements GestureController {
                     fastImagePathOk = false;
                     fallbackBitmap = imageToBitmap(image, getRotationDegrees());
                     MPImage mpImage = new BitmapImageBuilder(fallbackBitmap).build();
-                    result = handLandmarker.detect(mpImage);
+                    result = handLandmarker.detectForVideo(mpImage, android.os.SystemClock.uptimeMillis());
                 }
             } else {
                 fallbackBitmap = imageToBitmap(image, getRotationDegrees());
                 MPImage mpImage = new BitmapImageBuilder(fallbackBitmap).build();
-                result = handLandmarker.detect(mpImage);
+                result = handLandmarker.detectForVideo(mpImage, android.os.SystemClock.uptimeMillis());
             }
 
             if (result != null && !result.landmarks().isEmpty()) {
@@ -438,7 +436,7 @@ public class HandGestureCameraController implements GestureController {
                 listener.onMetrics(String.format(java.util.Locale.US,
                         "识别FPS %.1f | 推理 %dms | 分析 %dx%d | 丢帧=%d | 图像路径=%s",
                         fps, lastInferCostMs, selectedSize.getWidth(), selectedSize.getHeight(),
-                        lastFrameDropCount, fastImagePathOk ? "MediaImage" : "Bitmap/JPEG"));
+                        lastFrameDropCount, fastImagePathOk ? "MediaImage" : "Bitmap/YUV"));
                 inferFrameCount = 0;
                 lastFrameDropCount = 0;
                 lastMetricMs = now;
@@ -460,7 +458,7 @@ public class HandGestureCameraController implements GestureController {
             // 老版本如果没有 setRotation，就直接使用原图方向。
         }
         MPImage mpImage = (MPImage) cls.getMethod("build").invoke(builder);
-        return handLandmarker.detect(mpImage);
+        return handLandmarker.detectForVideo(mpImage, android.os.SystemClock.uptimeMillis());
     }
 
     private int getRotationDegrees() {
@@ -472,13 +470,9 @@ public class HandGestureCameraController implements GestureController {
     }
 
     private Bitmap imageToBitmap(Image image, int rotateDegrees) {
-        byte[] nv21 = yuv420ToNv21(image);
-        YuvImage yuvImage = new YuvImage(nv21, ImageFormat.NV21, image.getWidth(), image.getHeight(), null);
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        yuvImage.compressToJpeg(new android.graphics.Rect(0, 0, image.getWidth(), image.getHeight()), 72, out);
-        byte[] jpeg = out.toByteArray();
-        Bitmap src = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
-        if (src == null) throw new RuntimeException("bitmap decode failed");
+        // v5.7：不再走 YUV -> JPEG -> Bitmap。JPEG 编码/解码在部分机型上非常慢。
+        // 这里直接从 YUV_420_888 采样成 ARGB_8888 Bitmap，减少一大段无意义转换。
+        Bitmap src = yuv420ToBitmapFast(image);
         if (rotateDegrees == 0) return src;
         Matrix matrix = new Matrix();
         matrix.postRotate(rotateDegrees);
@@ -487,39 +481,50 @@ public class HandGestureCameraController implements GestureController {
         return rotated;
     }
 
-    private byte[] yuv420ToNv21(Image image) {
+    private Bitmap yuv420ToBitmapFast(Image image) {
         int width = image.getWidth();
         int height = image.getHeight();
-        int ySize = width * height;
-        int uvSize = width * height / 4;
-        byte[] nv21 = new byte[ySize + uvSize * 2];
+        int[] out = new int[width * height];
 
-        ByteBuffer yBuffer = image.getPlanes()[0].getBuffer();
-        ByteBuffer uBuffer = image.getPlanes()[1].getBuffer();
-        ByteBuffer vBuffer = image.getPlanes()[2].getBuffer();
-        int yRowStride = image.getPlanes()[0].getRowStride();
-        int yPixelStride = image.getPlanes()[0].getPixelStride();
-        int uRowStride = image.getPlanes()[1].getRowStride();
-        int uPixelStride = image.getPlanes()[1].getPixelStride();
-        int vRowStride = image.getPlanes()[2].getRowStride();
-        int vPixelStride = image.getPlanes()[2].getPixelStride();
+        Image.Plane yPlane = image.getPlanes()[0];
+        Image.Plane uPlane = image.getPlanes()[1];
+        Image.Plane vPlane = image.getPlanes()[2];
+        ByteBuffer yBuf = yPlane.getBuffer();
+        ByteBuffer uBuf = uPlane.getBuffer();
+        ByteBuffer vBuf = vPlane.getBuffer();
+        int yRowStride = yPlane.getRowStride();
+        int yPixelStride = yPlane.getPixelStride();
+        int uRowStride = uPlane.getRowStride();
+        int uPixelStride = uPlane.getPixelStride();
+        int vRowStride = vPlane.getRowStride();
+        int vPixelStride = vPlane.getPixelStride();
 
         int pos = 0;
-        for (int row = 0; row < height; row++) {
-            for (int col = 0; col < width; col++) {
-                nv21[pos++] = yBuffer.get(row * yRowStride + col * yPixelStride);
+        for (int y = 0; y < height; y++) {
+            int yRow = y * yRowStride;
+            int uvRow = (y >> 1);
+            for (int x = 0; x < width; x++) {
+                int yValue = yBuf.get(yRow + x * yPixelStride) & 0xff;
+                int uvCol = (x >> 1);
+                int uValue = uBuf.get(uvRow * uRowStride + uvCol * uPixelStride) & 0xff;
+                int vValue = vBuf.get(uvRow * vRowStride + uvCol * vPixelStride) & 0xff;
+
+                int c = yValue - 16;
+                int d = uValue - 128;
+                int e = vValue - 128;
+                if (c < 0) c = 0;
+                int r = (298 * c + 409 * e + 128) >> 8;
+                int g = (298 * c - 100 * d - 208 * e + 128) >> 8;
+                int b = (298 * c + 516 * d + 128) >> 8;
+                if (r < 0) r = 0; else if (r > 255) r = 255;
+                if (g < 0) g = 0; else if (g > 255) g = 255;
+                if (b < 0) b = 0; else if (b > 255) b = 255;
+                out[pos++] = 0xff000000 | (r << 16) | (g << 8) | b;
             }
         }
-        int uvPos = ySize;
-        int chromaHeight = height / 2;
-        int chromaWidth = width / 2;
-        for (int row = 0; row < chromaHeight; row++) {
-            for (int col = 0; col < chromaWidth; col++) {
-                nv21[uvPos++] = vBuffer.get(row * vRowStride + col * vPixelStride);
-                nv21[uvPos++] = uBuffer.get(row * uRowStride + col * uPixelStride);
-            }
-        }
-        return nv21;
+        Bitmap bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        bmp.setPixels(out, 0, width, 0, 0, width, height);
+        return bmp;
     }
 
     private static String safeMsg(Throwable e) {

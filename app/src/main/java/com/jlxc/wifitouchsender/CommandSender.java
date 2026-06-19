@@ -9,7 +9,10 @@ import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
 import java.net.HttpURLConnection;
+import java.net.InetAddress;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -50,6 +53,10 @@ public class CommandSender {
     private volatile int cursorSentCount = 0;
     private volatile int cursorErrorCount = 0;
     private volatile long cursorLastMs = 0L;
+    private volatile boolean udpCursorMode = false;
+    private volatile int udpPort = 47220;
+    private volatile InetAddress udpAddress = null;
+    private DatagramSocket udpSocket = null;
     private volatile MetricsListener metricsListener;
 
     public interface MetricsListener {
@@ -61,8 +68,24 @@ public class CommandSender {
     }
 
     public void setTarget(String host, int port) {
-        this.host = host == null ? "" : host.trim();
-        this.port = port <= 0 ? 47220 : port;
+        String newHost = host == null ? "" : host.trim();
+        int newPort = port <= 0 ? 47220 : port;
+        if (!newHost.equals(this.host)) udpAddress = null;
+        this.host = newHost;
+        this.port = newPort;
+        this.udpPort = newPort; // UDP 可以和 HTTP 使用同一个端口号，协议层不同，不冲突
+    }
+
+    public void setCursorUdpMode(boolean enabled) {
+        this.udpCursorMode = enabled;
+        if (!enabled) return;
+        try {
+            if (udpSocket == null || udpSocket.isClosed()) {
+                udpSocket = new DatagramSocket();
+            }
+        } catch (Exception e) {
+            cursorErrorCount++;
+        }
     }
 
     public String getBaseUrl() {
@@ -103,8 +126,13 @@ public class CommandSender {
                 p.put("y", trim(latestCursorY));
                 long start = android.os.SystemClock.uptimeMillis();
                 boolean ok = true;
+                String mode = udpCursorMode ? "UDP坐标" : "HTTP坐标";
                 try {
-                    request("POST", "/api/set", encode(p), 120, 160, true);
+                    if (udpCursorMode) {
+                        sendUdpCursor(latestCursorX, latestCursorY);
+                    } else {
+                        request("POST", "/api/set", encode(p), 80, 100, true);
+                    }
                     cursorSentCount++;
                 } catch (Exception e) {
                     ok = false;
@@ -115,7 +143,7 @@ public class CommandSender {
                 MetricsListener ml = metricsListener;
                 if (ml != null) {
                     long pending = Math.max(0, cursorSeq - cursorSentSeq);
-                    String text = "HTTP坐标 " + cursorLastMs + "ms | 已发=" + cursorSentCount +
+                    String text = mode + " " + cursorLastMs + "ms | 已发=" + cursorSentCount +
                             " | 待合并=" + pending + " | 错误=" + cursorErrorCount + (ok ? "" : " | 最近失败");
                     mainHandler.post(() -> ml.onCursorMetrics(text));
                 }
@@ -124,6 +152,16 @@ public class CommandSender {
             cursorWorkerActive.set(false);
             if (cursorSeq != cursorSentSeq) startCursorWorkerIfNeeded();
         }
+    }
+
+    private void sendUdpCursor(float x, float y) throws Exception {
+        if (udpSocket == null || udpSocket.isClosed()) udpSocket = new DatagramSocket();
+        if (udpAddress == null) udpAddress = InetAddress.getByName(host);
+        // 接收端建议支持这一行协议：SET <x> <y>\n
+        String text = "SET " + trim(x) + " " + trim(y) + "\n";
+        byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
+        DatagramPacket packet = new DatagramPacket(bytes, bytes.length, udpAddress, udpPort);
+        udpSocket.send(packet);
     }
 
     public void scroll(float dy) {

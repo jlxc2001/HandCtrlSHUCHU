@@ -37,6 +37,7 @@ public class HandGestureActivity extends Activity {
     private HandSkeletonOverlayView skeletonOverlay;
     private Switch mirrorSwitch;
     private Switch autoStartSwitch;
+    private Switch udpSwitch;
 
     private GestureController controller;
     private HandGestureLogic logic;
@@ -84,14 +85,14 @@ public class HandGestureActivity extends Activity {
         scroll.addView(root, new ScrollView.LayoutParams(-1, -2));
 
         TextView title = new TextView(this);
-        title.setText("摄像头手势控制 v5.6 性能版");
+        title.setText("摄像头手势控制 v5.7 低延迟版");
         title.setTextSize(24);
         title.setTextColor(Color.rgb(20, 24, 31));
         title.setGravity(Gravity.CENTER_VERTICAL);
         root.addView(title, lp(-1, -2));
 
         TextView desc = new TextView(this);
-        desc.setText("半捏移动光标，拇指食指捏合点击，L 形返回，五指张开 HOME。v5.6 加入手部骨骼叠加、识别/网络耗时显示和高频坐标合并发送。 ");
+        desc.setText("半捏移动光标，拇指食指捏合点击，L 形返回，五指张开 HOME。v5.7 加入 VIDEO 跟踪模式、YUV 直转 Bitmap、可选 UDP 坐标模式和更详细的识别/网络耗时显示。 ");
         desc.setTextSize(14);
         desc.setTextColor(Color.rgb(85, 91, 103));
         desc.setPadding(0, dp(6), 0, dp(10));
@@ -141,6 +142,12 @@ public class HandGestureActivity extends Activity {
         autoStartSwitch.setTextColor(Color.rgb(35, 41, 50));
         root.addView(autoStartSwitch, lp(-1, -2));
 
+        udpSwitch = new Switch(this);
+        udpSwitch.setText("UDP 低延迟坐标模式：需要接收端同时支持 UDP SET x y");
+        udpSwitch.setTextSize(14);
+        udpSwitch.setTextColor(Color.rgb(35, 41, 50));
+        root.addView(udpSwitch, lp(-1, -2));
+
         FrameLayout previewBox = new FrameLayout(this);
         preview = new TextureView(this);
         skeletonOverlay = new HandSkeletonOverlayView(this);
@@ -169,7 +176,7 @@ public class HandGestureActivity extends Activity {
         renderDebug(true);
 
         TextView tips = new TextView(this);
-        tips.setText("性能判断：如果骨骼跟手但车机光标慢，多半是网络/接收端 HTTP 链路慢；如果骨骼本身也一卡一卡，就是本机识别链路慢。v5.6 会把坐标请求合并，只发最新点，避免网络请求堆积拖尾。后续接收端若加入 UDP 坐标接口，延迟还能继续下降。 ");
+        tips.setText("性能判断：如果骨骼跟手但车机光标慢，多半是网络/接收端链路慢；如果骨骼本身也一卡一卡，就是本机识别链路慢。UDP 模式不等待响应，延迟应接近 0~3ms，但接收端必须新增 UDP 解析：收到 SET x y 后直接移动光标。HTTP 模式仍可作为兼容模式。 ");
         tips.setTextSize(13);
         tips.setTextColor(Color.rgb(100, 106, 118));
         tips.setPadding(0, dp(8), 0, dp(20));
@@ -185,6 +192,7 @@ public class HandGestureActivity extends Activity {
             savePrefs();
         });
         autoStartSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> savePrefs());
+        udpSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> { applyTarget(); savePrefs(); });
 
         setContentView(scroll);
     }
@@ -332,6 +340,7 @@ public class HandGestureActivity extends Activity {
         int port = DEFAULT_PORT;
         try { port = Integer.parseInt(portEdit.getText().toString().trim()); } catch (Exception ignored) {}
         sender.setTarget(ip, port);
+        sender.setCursorUdpMode(udpSwitch != null && udpSwitch.isChecked());
     }
 
     private void loadPrefs() {
@@ -340,6 +349,7 @@ public class HandGestureActivity extends Activity {
         portEdit.setText(String.valueOf(sp.getInt("port", DEFAULT_PORT)));
         mirrorSwitch.setChecked(sp.getBoolean("mirrorX", true));
         autoStartSwitch.setChecked(sp.getBoolean("gestureAutoStart", false));
+        if (udpSwitch != null) udpSwitch.setChecked(sp.getBoolean("udpCursor", false));
         if (logic != null) logic.setMirrorX(mirrorSwitch.isChecked());
         if (skeletonOverlay != null) skeletonOverlay.setMirrorX(mirrorSwitch.isChecked());
         if (autoStartSwitch.isChecked()) preview.postDelayed(this::startGesture, 250);
@@ -353,6 +363,7 @@ public class HandGestureActivity extends Activity {
                 .putInt("port", port)
                 .putBoolean("mirrorX", mirrorSwitch != null && mirrorSwitch.isChecked())
                 .putBoolean("gestureAutoStart", autoStartSwitch != null && autoStartSwitch.isChecked())
+                .putBoolean("udpCursor", udpSwitch != null && udpSwitch.isChecked())
                 .apply();
     }
 
